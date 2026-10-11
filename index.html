@@ -11,7 +11,7 @@
 </div>
 </div>
 
-  <audio id="myAudio" src="">
+  <audio id="myAudio" src="img/ay.mp3">
   </audio>
 
 <div style="display: flex; align-items: center; justify-content: center;position: fixed;bottom: 250px; left: 0px;">
@@ -178,9 +178,7 @@ height:800px;
 margin: 0 auto;
 transform-style: preserve-3d;
 transform: rotateX(-0deg) rotateY(-360deg);
--webkit-animation: rotate 10s infinite;
-/*匀速*/
-animation-timing-function: linear;
+/* 旋转已改由 JS 控制（支持拖动自由旋转 / 双指缩放），不再使用 CSS 动画 */
 }
 @-webkit-keyframes rotate{
 from{transform: rotateX(0deg) rotateY(0deg);}
@@ -190,8 +188,8 @@ to{transform: rotateX(360deg) rotateY(360deg);}
 position: absolute;
 width: 500px;
 height: 500px;
-opacity: 0.8;
-transition: all .4s;
+opacity: 0.9;      /* ← 外层图片更透明（原为 0.8） */
+transition: all .8s;
 }
 /*定义所有图片样式*/
 .pic{
@@ -268,6 +266,63 @@ transform: rotateX(90deg) translateZ(400px);
 .wrap:hover .cube .out_bottom{
 transform: rotateX(-90deg) translateZ(400px);
 }
+
+/* ===== 3D旋转图：手动控制（点击展开/收起、按住拖动旋转、双指缩放） ===== */
+.wrap{
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grab;
+}
+.wrap:active{
+  cursor: grabbing;
+}
+.cube, .cube div, .cube span, .cube img{
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.cube{
+  will-change: transform;
+}
+/* 收起状态（默认）：覆盖原有 hover 展开效果 */
+.wrap:not(.expand) .cube .out_front{
+  transform: rotateY(0deg) translateZ(250px);
+}
+.wrap:not(.expand) .cube .out_back{
+  transform: translateZ(-250px) rotateY(180deg);
+}
+.wrap:not(.expand) .cube .out_left{
+  transform: rotateY(90deg) translateZ(250px);
+}
+.wrap:not(.expand) .cube .out_right{
+  transform: rotateY(-90deg) translateZ(250px);
+}
+.wrap:not(.expand) .cube .out_top{
+  transform: rotateX(90deg) translateZ(250px);
+}
+.wrap:not(.expand) .cube .out_bottom{
+  transform: rotateX(-90deg) translateZ(250px);
+}
+/* 展开状态：点击一次切换 */
+.wrap.expand .cube .out_front{
+  transform: rotateY(0deg) translateZ(400px);
+}
+.wrap.expand .cube .out_back{
+  transform: translateZ(-400px) rotateY(180deg);
+}
+.wrap.expand .cube .out_left{
+  transform: rotateY(90deg) translateZ(400px);
+}
+.wrap.expand .cube .out_right{
+  transform: rotateY(-90deg) translateZ(400px);
+}
+.wrap.expand .cube .out_top{
+  transform: rotateX(90deg) translateZ(400px);
+}
+.wrap.expand .cube .out_bottom{
+  transform: rotateX(-90deg) translateZ(400px);
+}
 </style>
  </HEAD>
 
@@ -317,10 +372,6 @@ transform: rotateX(-90deg) translateZ(400px);
 <img src="img/11.jpg" class="in_pic" />
 </span>
 
-<span class="in_bottom">
-<img src="img/12.jpg" class="in_pic" />
-</span>
-
 </div>
 </div>
 
@@ -329,12 +380,10 @@ transform: rotateX(-90deg) translateZ(400px);
 
 
 
-
-
  var audio = document.getElementById("myAudio");
     var playBtn = document.querySelector(".play-btn");
     var textContainer = document.getElementById("text-container");
-    var typedText = " 你好 小妹 最近可好~~ 上次你给我说 我梦到你了嘛 那是我真的很想问是什么样的梦 但不敢 我也不知道， 其实我一直想给你发消息 我确实有好多好多话给你说  似乎又不敢 其实那时我也梦到你 但昨天我真的很是害怕 ............ 但我却失去你呀  醒了后 一直想  怎么会这样 到底怎么回事 我...想不起来， 然后嘛  我今天给你做这个 送给你 祝你愉快 小妹 呵呵呵~~~    "; 
+    var typedText = ""; 
     var currentCharIndex = 0;
     var typingTimer;
 
@@ -1413,5 +1462,842 @@ window.addEventListener('load', function(e) {
     w['r'+r] = w['r'+r] || w['webkitR'+r] || w['mozR'+r] || w['msR'+r] || w['oR'+r] || function(c){ w.setTimeout(c, 1000 / 60); };
 })(window, 'equestAnimationFrame');
   </script>
+
+<!-- ===== 3D旋转图交互控制（点击展开/收起、按住拖动旋转、双指缩放） ===== -->
+<script>
+(function () {
+    var wrap = document.querySelector('.wrap');
+    var cube = document.querySelector('.cube');
+    if (!wrap || !cube) return;
+
+    var rotX = 0;          // X 轴角度
+    var rotY = 0;          // Y 轴角度
+    var scale = 1;         // 缩放
+    var AUTO_SPEED = 36;   // 自动旋转速度（度/秒，360度/10秒，与原动画一致）
+
+    var dragging = false;  // 是否处于手动控制中（按住时暂停自动旋转）
+    var expanded = false;  // 是否展开
+
+    var pointers = {};     // pointerId -> {x, y}
+    var pinchStartDist = 0;
+    var pinchStartScale = 1;
+    var downTime = 0;
+    var movedDist = 0;
+
+    function applyTransform() {
+        cube.style.transform =
+            'rotateX(' + rotX + 'deg) rotateY(' + rotY + 'deg) ' +
+            'scale3d(' + scale + ',' + scale + ',' + scale + ')';
+    }
+
+    function countPointers() {
+        var n = 0;
+        for (var k in pointers) { if (pointers.hasOwnProperty(k)) n++; }
+        return n;
+    }
+
+    function pointerList() {
+        var arr = [];
+        for (var k in pointers) { if (pointers.hasOwnProperty(k)) arr.push(pointers[k]); }
+        return arr;
+    }
+
+    function pinchDistance() {
+        var p = pointerList();
+        if (p.length < 2) return 0;
+        var dx = p[0].x - p[1].x;
+        var dy = p[0].y - p[1].y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function clamp(v, a, b) {
+        return v < a ? a : (v > b ? b : v);
+    }
+
+    /* 自动旋转（代替原来的 CSS 动画，保证拖动结束后仍持续旋转） */
+    var lastTime = performance.now();
+    function tick(now) {
+        var dt = (now - lastTime) / 1000;
+        lastTime = now;
+        if (dt > 0.1) dt = 0.1;
+        if (!dragging) {
+            rotX += AUTO_SPEED * dt;
+            rotY += AUTO_SPEED * dt;
+        }
+        applyTransform();
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    /* 按下 */
+    wrap.addEventListener('pointerdown', function (e) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+        pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+        if (wrap.setPointerCapture) {
+            try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+
+        var n = countPointers();
+        if (n === 1) {
+            dragging = true;
+            movedDist = 0;
+            downTime = Date.now();
+            pinchStartDist = 0;
+        } else if (n === 2) {
+            pinchStartDist = pinchDistance();
+            pinchStartScale = scale;
+            movedDist = 999;   // 双指操作不算点击
+        }
+        e.preventDefault();
+    });
+
+    /* 移动：单指旋转 / 双指缩放 */
+    wrap.addEventListener('pointermove', function (e) {
+        if (!pointers[e.pointerId]) return;
+
+        var prev = pointers[e.pointerId];
+        pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+        var n = countPointers();
+
+        if (n >= 2) {
+            var d = pinchDistance();
+            if (pinchStartDist > 0 && d > 0) {
+                scale = clamp(pinchStartScale * d / pinchStartDist, 0.3, 3);
+            }
+            movedDist = 999;
+        } else if (n === 1 && dragging) {
+            var dx = e.clientX - prev.x;
+            var dy = e.clientY - prev.y;
+            movedDist += Math.abs(dx) + Math.abs(dy);
+            rotY += dx * 0.4;
+            rotX -= dy * 0.4;
+        }
+
+        applyTransform();
+        e.preventDefault();
+    });
+
+    function endPointer(e, isCancel) {
+        if (!pointers[e.pointerId]) return;
+        delete pointers[e.pointerId];
+
+        var n = countPointers();
+        if (n === 1) {
+            // 双指变单指：重置缩放基准，继续可拖动旋转
+            pinchStartDist = 0;
+        } else if (n === 0) {
+            dragging = false;
+            pinchStartDist = 0;
+            // 未移动且按下时间短 —— 视为点击，切换展开/收起
+            if (!isCancel && movedDist < 10 && (Date.now() - downTime) < 400) {
+                expanded = !expanded;
+                if (expanded) {
+                    wrap.classList.add('expand');
+                } else {
+                    wrap.classList.remove('expand');
+                }
+            }
+        }
+        e.preventDefault();
+    }
+
+    wrap.addEventListener('pointerup', function (e) { endPointer(e, false); });
+    wrap.addEventListener('pointercancel', function (e) { endPointer(e, true); });
+
+    applyTransform();
+})();
+</script>
+
+<!-- ============================================================= -->
+<!-- ===== 以下为新增：星空 / 银河 / 流星 / 玫瑰花瓣 / 拖尾 / 许愿瓶 / 心跳光晕 / 礼物盒光效 ===== -->
+<!-- ============================================================= -->
+
+<style>
+/* 让原有 UI 层浮在新增的魔法层之上 */
+.wrap { z-index: 10; }
+.play-btn { z-index: 10; }
+
+/* ===== 星空 / 银河 / 流星 / 玫瑰花瓣 画布 ===== */
+#magic-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ===== 指尖拖尾层 ===== */
+#trail-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+/* ===== 许愿瓶 ===== */
+#wish-bottle-wrap {
+  position: fixed;
+  right: 20px;
+  bottom: 110px;
+  width: 80px;
+  z-index: 9998;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.3s;
+}
+#wish-bottle-wrap:hover { transform: translateY(-4px); }
+
+#wish-bottle {
+  position: relative;
+  width: 70px;
+  height: 92px;
+  margin: 0 auto;
+}
+
+#bottle-glass {
+  position: absolute;
+  bottom: 0;
+  left: 5px;
+  width: 60px;
+  height: 70px;
+  border-radius: 50% 50% 35% 35% / 45% 45% 55% 55%;
+  background: linear-gradient(180deg, rgba(200,230,255,0.15), rgba(150,200,255,0.35));
+  border: 2px solid rgba(255,255,255,0.75);
+  box-shadow: 0 0 18px rgba(150,200,255,0.55), inset 0 0 14px rgba(255,255,255,0.3);
+  overflow: hidden;
+}
+
+#bottle-neck {
+  position: absolute;
+  top: 0;
+  left: 25px;
+  width: 20px;
+  height: 22px;
+  background: rgba(180,220,255,0.3);
+  border: 2px solid rgba(255,255,255,0.75);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+
+#bottle-cork {
+  position: absolute;
+  top: -6px;
+  left: 26px;
+  width: 18px;
+  height: 10px;
+  background: linear-gradient(180deg, #c8a06a, #8a6136);
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+/* 瓶中的爱心（原为星星） */
+.bottle-star {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  line-height: 10px;
+  text-align: center;
+  font-size: 10px;
+  color: #ff8eb8;
+  text-shadow: 0 0 8px #ff8eb8, 0 0 14px rgba(255,140,190,0.8);
+  animation: starTwinkle 1.5s infinite alternate;
+}
+
+@keyframes starTwinkle {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+#wish-count {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #ffe9a8;
+  text-shadow: 0 0 6px rgba(255,220,120,0.7);
+  font-family: Arial, sans-serif;
+}
+
+#wish-blessing {
+  position: fixed;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%) scale(0.6);
+  color: #fff5e0;
+  font-size: 32px;
+  font-weight: bold;
+  text-shadow: 0 0 20px rgba(255,200,120,0.9), 0 0 40px rgba(255,150,200,0.6);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 99999;
+  transition: opacity 0.6s, transform 0.6s;
+  font-family: Arial, sans-serif;
+  letter-spacing: 4px;
+  white-space: nowrap;
+}
+
+/* ===== 礼物盒展开时的柔光和小星星 ===== */
+.wrap .gift-glow,
+.wrap .gift-stars {
+  pointer-events: none;
+}
+</style>
+
+<!-- 星空 / 银河 / 流星 / 玫瑰花瓣 画布 -->
+<canvas id="magic-canvas"></canvas>
+
+<!-- 指尖拖尾层 -->
+<div id="trail-layer"></div>
+
+<!-- 许愿瓶 -->
+<div id="wish-bottle-wrap" title="点击屏幕收集爱心吧～">
+  <div id="wish-bottle">
+    <div id="bottle-neck"></div>
+    <div id="bottle-glass">
+      <div id="bottle-stars" style="position:absolute;inset:0;"></div>
+    </div>
+    <div id="bottle-cork"></div>
+  </div>
+  <div id="wish-count">0 / 7</div>
+</div>
+
+<!-- 祝福文字 -->
+<div id="wish-blessing">✨ 愿望已收到 ✨</div>
+
+<script>
+/* ============================================================
+   1. 星空 / 银河 / 流星 / 玫瑰花瓣（画布层）
+   ============================================================ */
+(function () {
+  var canvas = document.getElementById('magic-canvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var W = 0, H = 0;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  /* 星星 */
+  var stars = [];
+  for (var i = 0; i < 130; i++) {
+    stars.push({
+      x: Math.random(),
+      y: Math.random(),
+      r: Math.random() * 1.5 + 0.3,
+      tw: Math.random() * Math.PI * 2,
+      tws: Math.random() * 0.03 + 0.01
+    });
+  }
+
+  /* 流星 */
+  var meteors = [];
+  var meteorTimer = 0;
+  function spawnMeteor() {
+    meteors.push({
+      x: Math.random() * W * 1.2,
+      y: -40,
+      vx: -3 - Math.random() * 3,
+      vy: 4 + Math.random() * 3,
+      life: 1
+    });
+  }
+
+  /* 玫瑰花瓣 */
+  var petals = [];
+  for (var i = 0; i < 16; i++) {
+    petals.push({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight - window.innerHeight,
+      vy: 0.35 + Math.random() * 0.5,
+      vx: -0.3 + Math.random() * 0.6,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (-0.5 + Math.random()) * 0.02,
+      size: 7 + Math.random() * 8,
+      hue: 335 + Math.random() * 25,
+      sway: Math.random() * Math.PI * 2
+    });
+  }
+
+  /* 银河 */
+  function drawGalaxy() {
+    var grd = ctx.createLinearGradient(0, 0, W, H);
+    grd.addColorStop(0, 'rgba(60,30,80,0)');
+    grd.addColorStop(0.4, 'rgba(120,80,160,0.06)');
+    grd.addColorStop(0.55, 'rgba(180,130,200,0.10)');
+    grd.addColorStop(0.7, 'rgba(120,80,160,0.06)');
+    grd.addColorStop(1, 'rgba(60,30,80,0)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  var lastTime = performance.now();
+
+  function loop(now) {
+    var dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.1) dt = 0.1;
+
+    ctx.clearRect(0, 0, W, H);
+
+    /* 银河 */
+    drawGalaxy();
+
+    /* 星星闪烁 */
+    ctx.save();
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      s.tw += s.tws;
+      var alpha = 0.25 + 0.7 * (0.5 + 0.5 * Math.sin(s.tw));
+      ctx.beginPath();
+      ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,240,200,' + alpha + ')';
+      ctx.shadowColor = 'rgba(255,240,200,' + alpha + ')';
+      ctx.shadowBlur = 6;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    /* 流星 */
+    meteorTimer += dt;
+    if (meteorTimer > 3.5 + Math.random() * 4) {
+      meteorTimer = 0;
+      spawnMeteor();
+    }
+    ctx.save();
+    for (var i = meteors.length - 1; i >= 0; i--) {
+      var m = meteors[i];
+      m.x += m.vx;
+      m.y += m.vy;
+      var grad = ctx.createLinearGradient(m.x, m.y, m.x - m.vx * 14, m.y - m.vy * 14);
+      grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+      grad.addColorStop(0.5, 'rgba(200,220,255,0.5)');
+      grad.addColorStop(1, 'rgba(200,220,255,0)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.lineTo(m.x - m.vx * 16, m.y - m.vy * 16);
+      ctx.stroke();
+      if (m.x < -150 || m.y > H + 150) meteors.splice(i, 1);
+    }
+    ctx.restore();
+
+    /* 玫瑰花瓣 */
+    ctx.save();
+    for (var i = 0; i < petals.length; i++) {
+      var p = petals[i];
+      p.sway += 0.02;
+      p.x += p.vx + Math.sin(p.sway) * 0.4;
+      p.y += p.vy;
+      p.rot += p.rotV;
+      if (p.y > H + 30) { p.y = -30; p.x = Math.random() * W; }
+      if (p.x < -30) p.x = W + 30;
+      if (p.x > W + 30) p.x = -30;
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      var sz = p.size;
+      ctx.beginPath();
+      ctx.moveTo(0, -sz);
+      ctx.bezierCurveTo(sz * 0.8, -sz * 0.6, sz * 0.8, sz * 0.6, 0, sz);
+      ctx.bezierCurveTo(-sz * 0.8, sz * 0.6, -sz * 0.8, -sz * 0.6, 0, -sz);
+      var g = ctx.createLinearGradient(0, -sz, 0, sz);
+      g.addColorStop(0, 'hsla(' + p.hue + ',85%,78%,0.85)');
+      g.addColorStop(1, 'hsla(' + (p.hue - 20) + ',85%,58%,0.7)');
+      ctx.fillStyle = g;
+      ctx.shadowColor = 'rgba(255,150,180,0.6)';
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+
+
+/* ============================================================
+   2. 指尖爱心 / 樱花拖尾 + 点击爆开樱花花瓣
+   ============================================================ */
+(function () {
+  var layer = document.getElementById('trail-layer');
+  if (!layer) return;
+
+  var symbols = ['❤', '✿', '✦', '❀', '★'];
+  var colors = ['#ffb6c1', '#ffd6e7', '#fff0b3', '#ffc4d6', '#f5d0ff', '#ffe4ec'];
+  var lastX = null, lastY = null;
+
+  function spawn(x, y, big) {
+    var el = document.createElement('div');
+    el.textContent = symbols[Math.floor(Math.random() * symbols.length)];
+    el.style.position = 'absolute';
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.style.transform = 'translate(-50%, -50%)';
+    el.style.fontSize = (big ? 18 : 11) + Math.random() * 10 + 'px';
+    el.style.color = colors[Math.floor(Math.random() * colors.length)];
+    el.style.pointerEvents = 'none';
+    el.style.textShadow = '0 0 6px rgba(255,200,220,0.9)';
+    el.style.transition = 'transform 0.95s ease-out, opacity 0.95s ease-out';
+    layer.appendChild(el);
+
+    var dx = (Math.random() - 0.5) * 60;
+    var dy = 40 + Math.random() * 50;
+    requestAnimationFrame(function () {
+      el.style.transform = 'translate(-50%, -50%) translate(' + dx + 'px,' + dy + 'px) scale(0.3) rotate(' + (Math.random() * 360) + 'deg)';
+      el.style.opacity = '0';
+    });
+    setTimeout(function () { el.remove(); }, 1100);
+  }
+
+  /* ====== 点击时爆开的樱花花瓣 ====== */
+  function spawnSakura(x, y) {
+    var petal = document.createElement('div');
+    petal.style.position = 'fixed';
+    petal.style.left = x + 'px';
+    petal.style.top = y + 'px';
+    petal.style.width = (10 + Math.random() * 10) + 'px';
+    petal.style.height = (14 + Math.random() * 12) + 'px';
+    petal.style.pointerEvents = 'none';
+    petal.style.zIndex = 99999;
+    petal.style.borderRadius = '50% 0 50% 50% / 60% 0 60% 60%';
+    petal.style.background = 'radial-gradient(circle at 30% 30%, #ffeaf0, #ffa8c2 60%, #ff7fa8)';
+    petal.style.boxShadow = '0 0 10px rgba(255,160,200,0.85)';
+    petal.style.transform = 'translate(-50%,-50%) rotate(0deg) scale(1)';
+    petal.style.transition = 'transform 1.6s cubic-bezier(0.25,0.6,0.4,1), opacity 1.6s ease-out';
+    document.body.appendChild(petal);
+
+    var angle = Math.random() * Math.PI * 2;
+    var dist = 90 + Math.random() * 130;
+    var tx = Math.cos(angle) * dist;
+    var ty = Math.sin(angle) * dist * 0.6 + 160; // 稍微向下飘
+    var rot = (Math.random() * 720 - 360);
+
+    requestAnimationFrame(function () {
+      petal.style.transform = 'translate(calc(-50% + ' + tx + 'px), calc(-50% + ' + ty + 'px)) rotate(' + rot + 'deg) scale(0.5)';
+      petal.style.opacity = '0';
+    });
+
+    setTimeout(function () { petal.remove(); }, 1700);
+  }
+
+  function onMove(e) {
+    var x, y;
+    if (e.touches && e.touches.length) {
+      x = e.touches[0].clientX;
+      y = e.touches[0].clientY;
+    } else {
+      x = e.clientX;
+      y = e.clientY;
+    }
+    if (lastX === null) { lastX = x; lastY = y; return; }
+    var dx = x - lastX, dy = y - lastY;
+    if (dx * dx + dy * dy > 24) {
+      lastX = x; lastY = y;
+      spawn(x, y, false);
+    }
+  }
+
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('touchmove', onMove, { passive: true });
+
+  /* 点击处爆开一圈爱心 + 樱花花瓣 */
+  window.addEventListener('click', function (e) {
+    if (e.target.closest('#player, .play-btn, .wrap, #wish-bottle-wrap, audio')) return;
+
+    /* 爱心 */
+    for (var i = 0; i < 6; i++) {
+      (function (i) {
+        setTimeout(function () {
+          spawn(e.clientX + (Math.random() - 0.5) * 40, e.clientY + (Math.random() - 0.5) * 40, true);
+        }, i * 40);
+      })(i);
+    }
+
+    /* 樱花花瓣 */
+    for (var j = 0; j < 10; j++) {
+      (function (j) {
+        setTimeout(function () {
+          spawnSakura(e.clientX + (Math.random() - 0.5) * 30, e.clientY + (Math.random() - 0.5) * 30);
+        }, j * 35);
+      })(j);
+    }
+  });
+})();
+
+
+/* ============================================================
+   3. 爱心许愿瓶：点击空白处 → 爱心飞入瓶子
+   ============================================================ */
+(function () {
+  var wrap = document.getElementById('wish-bottle-wrap');
+  var starsLayer = document.getElementById('bottle-stars');
+  var countEl = document.getElementById('wish-count');
+  var blessing = document.getElementById('wish-blessing');
+  if (!wrap || !starsLayer || !countEl || !blessing) return;
+
+  var count = 0;
+  var TARGET = 7;
+  var full = false;
+
+  function bottleCenter() {
+    var r = wrap.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  function flyHeart(x, y) {
+    var el = document.createElement('div');
+    el.textContent = '❤';
+    el.style.position = 'fixed';
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.style.transform = 'translate(-50%,-50%) scale(1.4)';
+    el.style.color = '#ff8eb8';
+    el.style.fontSize = '22px';
+    el.style.pointerEvents = 'none';
+    el.style.zIndex = 99999;
+    el.style.textShadow = '0 0 12px #ff8eb8, 0 0 22px rgba(255,140,190,0.85)';
+    el.style.transition = 'all 0.9s cubic-bezier(0.5,-0.5,0.5,1.5)';
+    document.body.appendChild(el);
+
+    var c = bottleCenter();
+    requestAnimationFrame(function () {
+      el.style.left = c.x + 'px';
+      el.style.top = c.y + 'px';
+      el.style.transform = 'translate(-50%,-50%) scale(0.3)';
+      el.style.opacity = '0.9';
+    });
+
+    setTimeout(function () {
+      el.remove();
+
+      /* 瓶子里的爱心 */
+      var inner = document.createElement('div');
+      inner.className = 'bottle-star';
+      inner.textContent = '❤';
+      inner.style.left = (15 + Math.random() * 70) + '%';
+      inner.style.bottom = (Math.random() * 45) + '%';
+      starsLayer.appendChild(inner);
+
+      count++;
+      countEl.textContent = count + ' / ' + TARGET;
+
+      if (count >= TARGET && !full) {
+        full = true;
+        showBlessing();
+      }
+    }, 900);
+  }
+
+  function showBlessing() {
+    blessing.style.opacity = '1';
+    blessing.style.transform = 'translate(-50%, -50%) scale(1)';
+    /* 撒一把小爱心 */
+    var c = bottleCenter();
+    for (var i = 0; i < 14; i++) {
+      (function (i) {
+        setTimeout(function () {
+          var star = document.createElement('div');
+          star.textContent = '❤';
+          star.style.position = 'fixed';
+          star.style.left = c.x + 'px';
+          star.style.top = c.y + 'px';
+          star.style.color = '#ff8eb8';
+          star.style.fontSize = (14 + Math.random() * 12) + 'px';
+          star.style.pointerEvents = 'none';
+          star.style.zIndex = 99998;
+          star.style.textShadow = '0 0 10px #ff8eb8';
+          star.style.transition = 'all 1.2s ease-out';
+          document.body.appendChild(star);
+          var angle = Math.random() * Math.PI * 2;
+          var dist = 120 + Math.random() * 160;
+          requestAnimationFrame(function () {
+            star.style.transform = 'translate(' + (Math.cos(angle) * dist) + 'px,' + (Math.sin(angle) * dist) + 'px) scale(0.3)';
+            star.style.opacity = '0';
+          });
+          setTimeout(function () { star.remove(); }, 1300);
+        }, i * 50);
+      })(i);
+    }
+
+    setTimeout(function () {
+      blessing.style.opacity = '0';
+      blessing.style.transform = 'translate(-50%, -50%) scale(0.8)';
+    }, 3500);
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('#player, .play-btn, .wrap, #wish-bottle-wrap, audio')) return;
+    flyHeart(e.clientX, e.clientY);
+  });
+})();
+
+
+/* ============================================================
+   4. 打字文字时冒小爱心 + 打完心跳光晕
+   ============================================================ */
+(function () {
+  var typed = document.getElementById('typed-text');
+  var cursor = document.getElementById('cursor');
+  if (!typed) return;
+
+  var charCount = 0;
+  var lastLen = 0;
+
+  function spawnMiniHeart() {
+    var r = typed.getBoundingClientRect();
+    var el = document.createElement('div');
+    el.textContent = '❤';
+    el.style.position = 'fixed';
+    el.style.left = (r.left + r.width / 2 + (Math.random() - 0.5) * 200) + 'px';
+    el.style.top = (r.top + r.height / 2) + 'px';
+    el.style.color = '#ff9ec4';
+    el.style.fontSize = (12 + Math.random() * 10) + 'px';
+    el.style.pointerEvents = 'none';
+    el.style.zIndex = 9999;
+    el.style.textShadow = '0 0 8px rgba(255,150,200,0.9)';
+    el.style.transition = 'all 1.2s ease-out';
+    document.body.appendChild(el);
+    requestAnimationFrame(function () {
+      el.style.transform = 'translateY(-80px) scale(0.4)';
+      el.style.opacity = '0';
+    });
+    setTimeout(function () { el.remove(); }, 1300);
+  }
+
+  var obs = new MutationObserver(function () {
+    var len = typed.textContent.length;
+    if (len > lastLen) {
+      charCount += len - lastLen;
+      lastLen = len;
+      if (charCount >= 6) {
+        charCount = 0;
+        spawnMiniHeart();
+      }
+    }
+  });
+  obs.observe(typed, { childList: true, characterData: true, subtree: true });
+
+  function triggerHeartbeat() {
+    var el = document.createElement('div');
+    el.style.position = 'fixed';
+    el.style.left = '50%';
+    el.style.top = '45%';
+    el.style.width = '220px';
+    el.style.height = '220px';
+    el.style.marginLeft = '-110px';
+    el.style.marginTop = '-110px';
+    el.style.borderRadius = '50%';
+    el.style.background = 'radial-gradient(circle, rgba(255,150,200,0.55), rgba(255,150,200,0) 70%)';
+    el.style.pointerEvents = 'none';
+    el.style.zIndex = 9997;
+    el.style.opacity = '0';
+    el.style.transition = 'opacity 0.35s, transform 0.35s';
+    document.body.appendChild(el);
+    requestAnimationFrame(function () {
+      el.style.opacity = '1';
+      el.style.transform = 'scale(1.15)';
+    });
+    setTimeout(function () {
+      el.style.opacity = '0';
+      el.style.transform = 'scale(1.6)';
+      setTimeout(function () { el.remove(); }, 450);
+    }, 420);
+  }
+
+  if (cursor) {
+    var cursorObs = new MutationObserver(function () {
+      if (cursor.style.display === 'block' && typed.textContent.length > 10) {
+        triggerHeartbeat();
+      }
+    });
+    cursorObs.observe(cursor, { attributes: true, attributeFilter: ['style'] });
+  }
+})();
+
+
+/* ============================================================
+   5. 3D 旋转图展开时：礼物盒柔光 + 小星星飞散
+   ============================================================ */
+(function () {
+  var wrap = document.querySelector('.wrap');
+  if (!wrap) return;
+
+  /* 柔光 */
+  var glow = document.createElement('div');
+  glow.className = 'gift-glow';
+  glow.style.cssText =
+    'position:absolute;left:50%;top:50%;width:640px;height:640px;' +
+    'margin-left:-320px;margin-top:-320px;border-radius:50%;' +
+    'pointer-events:none;opacity:0;transition:opacity 0.6s;' +
+    'background:radial-gradient(circle, rgba(255,220,180,0.35), rgba(255,180,220,0.15) 45%, rgba(255,180,220,0) 72%);' +
+    'z-index:-1;';
+  wrap.appendChild(glow);
+
+  /* 小星星层 */
+  var starsLayer = document.createElement('div');
+  starsLayer.className = 'gift-stars';
+  starsLayer.style.cssText =
+    'position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none;z-index:-1;';
+  wrap.appendChild(starsLayer);
+
+  var starEls = [];
+  for (var i = 0; i < 14; i++) {
+    var s = document.createElement('span');
+    s.textContent = (i % 3 === 0) ? '✦' : (i % 3 === 1 ? '✧' : '❋');
+    s.style.cssText =
+      'position:absolute;left:0;top:0;color:#ffe9a8;' +
+      'font-size:' + (12 + Math.random() * 12) + 'px;' +
+      'text-shadow:0 0 10px #ffd86b,0 0 18px rgba(255,150,200,0.7);' +
+      'opacity:0;transition:all 0.9s ease-out;';
+    s.dataset.angle = Math.random() * Math.PI * 2;
+    s.dataset.dist = 130 + Math.random() * 100;
+    starsLayer.appendChild(s);
+    starEls.push(s);
+  }
+
+  var wasExpand = false;
+  var obs = new MutationObserver(function () {
+    var isExpand = wrap.classList.contains('expand');
+    if (isExpand === wasExpand) return;
+    wasExpand = isExpand;
+
+    if (isExpand) {
+      glow.style.opacity = '1';
+      starEls.forEach(function (s, i) {
+        var a = parseFloat(s.dataset.angle);
+        var d = parseFloat(s.dataset.dist);
+        s.style.transition = 'none';
+        s.style.transform = 'translate(-50%,-50%) scale(0.3)';
+        s.style.opacity = '0';
+        // 强制重排
+        void s.offsetWidth;
+        s.style.transition = 'all 0.9s ease-out ' + (i * 0.03) + 's';
+        requestAnimationFrame(function () {
+          s.style.transform = 'translate(' + (Math.cos(a) * d - 8) + 'px,' + (Math.sin(a) * d - 8) + 'px) scale(1)';
+          s.style.opacity = '1';
+        });
+        setTimeout(function () {
+          s.style.opacity = '0';
+          s.style.transform = 'translate(' + (Math.cos(a) * d * 1.4 - 8) + 'px,' + (Math.sin(a) * d * 1.4 - 8) + 'px) scale(0.4)';
+        }, 900 + i * 30);
+      });
+    } else {
+      glow.style.opacity = '0';
+    }
+  });
+  obs.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+})();
+</script>
+
  </BODY>
 </HTML>
